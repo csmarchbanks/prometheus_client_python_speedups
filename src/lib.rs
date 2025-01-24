@@ -206,7 +206,6 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
             HashMap::new();
         let mut buckets: HashMap<BTreeMap<String, String>, HashMap<String, f64>> = HashMap::new();
         for sample in &metric.samples {
-            let key = (sample.name.clone(), sample.labels.clone());
             if metric.typ == "gauge" {
                 let mut without_pid = sample.labels.clone();
                 without_pid.remove("pid");
@@ -246,7 +245,7 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     }
                     Some(_) | None => {
                         // all/liveall
-                        samples.insert(key, sample.value);
+                        samples.insert((sample.name.clone(), sample.labels.clone()), sample.value);
                     }
                 };
             } else if metric.typ == "histogram" {
@@ -262,14 +261,14 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     }
                     None => {
                         samples
-                            .entry(key)
+                            .entry((sample.name.clone(), sample.labels.clone()))
                             .and_modify(|current| *current += sample.value)
                             .or_insert(sample.value);
                     }
                 }
             } else {
                 samples
-                    .entry(key)
+                    .entry((sample.name.clone(), sample.labels.clone()))
                     .and_modify(|current| *current += sample.value)
                     .or_insert(sample.value);
             }
