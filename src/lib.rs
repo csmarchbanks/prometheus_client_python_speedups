@@ -206,10 +206,10 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
         let mut buckets: HashMap<BTreeMap<String, String>, HashMap<String, f64>> = HashMap::new();
         for sample in &metric.samples {
             let key = (sample.name.clone(), sample.labels.clone());
-            let mut without_pid = sample.labels.clone();
-            without_pid.remove("pid");
-            let key_without_pid = (sample.name.clone(), without_pid);
             if metric.typ == "gauge" {
+                let mut without_pid = sample.labels.clone();
+                without_pid.remove("pid");
+                let key_without_pid = (sample.name.clone(), without_pid);
                 match metric.multiprocess_mode.as_deref() {
                     Some("min") | Some("livemin") => match samples.get_mut(&key_without_pid) {
                         Some(current) => {
