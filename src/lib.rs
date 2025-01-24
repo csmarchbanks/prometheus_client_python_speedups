@@ -1,49 +1,66 @@
-use std::{collections::{BTreeMap, HashMap}, fs::File, io::{self, ErrorKind, Read}, path::Path, str};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs::File,
+    io::{self, ErrorKind, Read},
+    path::Path,
+    str,
+};
 
 use pyo3::{exceptions::PyIOError, prelude::*, types::PyList};
 use serde::{Deserialize, Serialize};
 
 #[pyclass]
 #[derive(Debug)]
-struct Metric {
+pub struct Metric {
     #[pyo3(get)]
-    name: String,
+    pub name: String,
     #[pyo3(get)]
-    documentation: String,
+    pub documentation: String,
     #[pyo3(get)]
-    typ: String,
+    pub typ: String,
     multiprocess_mode: Option<String>,
     #[pyo3(get)]
-    samples: Vec<Sample>
+    pub samples: Vec<Sample>,
 }
 
 impl Metric {
-    fn new(name: String, documentation: String, typ: String) -> Self {
+    pub fn new(name: String, documentation: String, typ: String) -> Self {
         Self {
-            name, documentation, typ,
+            name,
+            documentation,
+            typ,
             multiprocess_mode: None,
             samples: vec![],
         }
     }
 
-    fn add_sample(&mut self, name: String, labels: BTreeMap<String, String>, value: f64, timestamp: f64) {
-        self.samples.push(Sample{
-            name, labels, value, timestamp,
+    pub fn add_sample(
+        &mut self,
+        name: String,
+        labels: BTreeMap<String, String>,
+        value: f64,
+        timestamp: f64,
+    ) {
+        self.samples.push(Sample {
+            name,
+            labels,
+            value,
+            timestamp,
         })
     }
 }
 
 #[pyclass]
-#[derive(Clone,Debug)]
-struct Sample {
+#[derive(Clone, Debug)]
+pub struct Sample {
     #[pyo3(get)]
-    name: String,
+    pub name: String,
     #[pyo3(get)]
-    labels: BTreeMap<String, String>,
+    pub labels: BTreeMap<String, String>,
     #[pyo3(get)]
-    timestamp: f64,
+    pub timestamp: f64,
     #[pyo3(get)]
-    value: f64
+    pub value: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -78,7 +95,7 @@ fn read_all_values_from_file(path: &String) -> Result<Vec<Value>, io::Error> {
         data.truncate(n);
     }
 
-    let used = u32::from_ne_bytes(data[0 .. 4].try_into().unwrap()) as usize;
+    let used = u32::from_ne_bytes(data[0..4].try_into().unwrap()) as usize;
     // Just initialized but with no data yet, return early.
     if used == 0 {
         return Ok(vec![]);
@@ -98,18 +115,18 @@ fn read_all_values(data: Vec<u8>, used: usize) -> Result<Vec<Value>, io::Error> 
     let mut pos: usize = 8;
     let mut result: Vec<Value> = Vec::with_capacity(100);
     while pos < used {
-        let encoded_len = u32::from_ne_bytes(data[pos .. pos+4].try_into().unwrap()) as usize;
+        let encoded_len = u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         if encoded_len + pos > used {
             return Err(io::Error::from(ErrorKind::InvalidData));
         }
         pos += 4;
-        let encoded_key = &data[pos..pos+encoded_len];
+        let encoded_key = &data[pos..pos + encoded_len];
         let padded_len = encoded_len + (8 - (encoded_len + 4) % 8);
         pos += padded_len;
-        let value = f64::from_ne_bytes(data[pos .. pos+8].try_into().unwrap());
-        let timestamp = f64::from_ne_bytes(data[pos+8 .. pos+16].try_into().unwrap());
+        let value = f64::from_ne_bytes(data[pos..pos + 8].try_into().unwrap());
+        let timestamp = f64::from_ne_bytes(data[pos + 8..pos + 16].try_into().unwrap());
         pos += 16;
-        result.push(Value{
+        result.push(Value {
             key: str::from_utf8(encoded_key).unwrap().to_string(),
             timestamp,
             value,
@@ -121,9 +138,16 @@ fn read_all_values(data: Vec<u8>, used: usize) -> Result<Vec<Value>, io::Error> 
 /// Read metrics from all multiprocess files
 fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, PyErr> {
     let mut metrics: HashMap<String, Metric> = HashMap::new();
+    let mut key_cache: HashMap<String, Key> = HashMap::new();
 
     for filepath in files.iter() {
-        let parts: Vec<&str> = Path::new(filepath).file_name().unwrap().to_str().unwrap().split("_").collect();
+        let parts: Vec<&str> = Path::new(filepath)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split("_")
+            .collect();
 
         let typ = parts[0];
         let is_live = typ == "gauge" && parts[1].starts_with("live");
@@ -133,14 +157,12 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
                 // Live gauges can be deleted between finding all .db files and reading them so
                 // ignore NotFound errors in this case.
                 if err.kind() == ErrorKind::NotFound && typ == "gauge" && is_live {
-                    continue
+                    continue;
                 }
                 return Err(PyIOError::new_err(err.to_string()));
             }
-            Ok(values) => values
+            Ok(values) => values,
         };
-
-        let mut key_cache: HashMap<String, Key> = HashMap::new();
 
         for value in values {
             let mut key = match key_cache.get(&value.key) {
@@ -155,7 +177,10 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
             let metric = match metrics.get_mut(key.metric_name.as_str()) {
                 Some(metric) => metric,
                 None => {
-                    metrics.insert(key.metric_name.clone(), Metric::new(key.metric_name.clone(), key.help_text, typ.to_string()));
+                    metrics.insert(
+                        key.metric_name.clone(),
+                        Metric::new(key.metric_name.clone(), key.help_text, typ.to_string()),
+                    );
                     metrics.get_mut(key.metric_name.as_str()).unwrap()
                 }
             };
@@ -169,7 +194,6 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
                 metric.add_sample(key.name, key.labels, value.value, value.timestamp);
             }
         }
-
     }
     Ok(metrics)
 }
@@ -177,7 +201,8 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
 fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
     for metric in metrics.values_mut() {
         let mut samples: HashMap<(String, BTreeMap<String, String>), f64> = HashMap::new();
-        let mut sample_timestamps: HashMap<(String, BTreeMap<String, String>), f64> = HashMap::new();
+        let mut sample_timestamps: HashMap<(String, BTreeMap<String, String>), f64> =
+            HashMap::new();
         let mut buckets: HashMap<BTreeMap<String, String>, HashMap<String, f64>> = HashMap::new();
         for sample in &metric.samples {
             let key = (sample.name.clone(), sample.labels.clone());
@@ -186,40 +211,32 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
             let key_without_pid = (sample.name.clone(), without_pid);
             if metric.typ == "gauge" {
                 match metric.multiprocess_mode.as_deref() {
-                    Some("min") | Some("livemin") => {
-                        match samples.get_mut(&key_without_pid) {
-                            Some(current) => {
-                                if sample.value < *current {
-                                    *current = sample.value;
-                                }
-                            }
-                            None => {
-                                samples.insert(key_without_pid, sample.value);
+                    Some("min") | Some("livemin") => match samples.get_mut(&key_without_pid) {
+                        Some(current) => {
+                            if sample.value < *current {
+                                *current = sample.value;
                             }
                         }
-                    }
-                    Some("max") | Some("livemax") => {
-                        match samples.get_mut(&key_without_pid) {
-                            Some(current) => {
-                                if sample.value > *current {
-                                    *current = sample.value;
-                                }
-                            }
-                            None => {
-                                samples.insert(key_without_pid, sample.value);
+                        None => {
+                            samples.insert(key_without_pid, sample.value);
+                        }
+                    },
+                    Some("max") | Some("livemax") => match samples.get_mut(&key_without_pid) {
+                        Some(current) => {
+                            if sample.value > *current {
+                                *current = sample.value;
                             }
                         }
-                    }
-                    Some("sum") | Some("livesum") => {
-                        match samples.get_mut(&key_without_pid) {
-                            Some(current) => {
-                                *current += sample.value
-                            }
-                            None => {
-                                samples.insert(key_without_pid, sample.value);
-                            }
+                        None => {
+                            samples.insert(key_without_pid, sample.value);
                         }
-                    }
+                    },
+                    Some("sum") | Some("livesum") => match samples.get_mut(&key_without_pid) {
+                        Some(current) => *current += sample.value,
+                        None => {
+                            samples.insert(key_without_pid, sample.value);
+                        }
+                    },
                     Some("mostrecent") | Some("livemostrecent") => {
                         match sample_timestamps.get_mut(&key_without_pid) {
                             Some(current_ts) => {
@@ -234,7 +251,8 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                             }
                         }
                     }
-                    Some(_) | None => { // all/liveall
+                    Some(_) | None => {
+                        // all/liveall
                         samples.insert(key, sample.value);
                     }
                 };
@@ -251,9 +269,7 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                             }
                         };
                         match bucket.get_mut(le) {
-                            Some(current) => {
-                                *current += sample.value
-                            }
+                            Some(current) => *current += sample.value,
                             None => {
                                 bucket.insert(le.clone(), sample.value);
                             }
@@ -261,9 +277,7 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     }
                     None => {
                         match samples.get_mut(&key) {
-                            Some(current) => {
-                                *current += sample.value
-                            }
+                            Some(current) => *current += sample.value,
                             None => {
                                 samples.insert(key, sample.value);
                             }
@@ -272,15 +286,12 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 }
             } else {
                 match samples.get_mut(&key) {
-                    Some(current) => {
-                        *current += sample.value
-                    }
+                    Some(current) => *current += sample.value,
                     None => {
                         samples.insert(key, sample.value);
                     }
                 };
             }
-
         }
         // Accumulate bucket values
         if metric.typ == "histogram" {
@@ -297,29 +308,37 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 for (bucket, value) in sorted {
                     let mut with_le = labels.clone();
                     with_le.insert("le".to_string(), (*bucket).clone());
-                    let key = ( metric.name.clone() + "_bucket", with_le);
+                    let key = (metric.name.clone() + "_bucket", with_le);
                     acc += value;
                     samples.insert(key, acc);
                 }
-                let key =(metric.name.clone() + "_count", (*labels).clone());
+                let key = (metric.name.clone() + "_count", (*labels).clone());
                 samples.insert(key, acc);
             }
         }
 
-        metric.samples = samples.into_iter().map(|((name, labels), value)| {
-            Sample {
-                name, labels, value, timestamp: 0.0,
-            }
-        }).collect();
+        metric.samples = samples
+            .into_iter()
+            .map(|((name, labels), value)| Sample {
+                name,
+                labels,
+                value,
+                timestamp: 0.0,
+            })
+            .collect();
     }
     metrics.into_values().collect()
 }
 
-#[pyfunction]
-fn merge(files: &Bound<PyList>) -> PyResult<Vec<Metric>>{
-    let filenames: Vec<String> = files.extract()?;
-    let metrics = read_multiprocess_files(&filenames)?;
+pub fn merge_internal(files: &[String]) -> Result<Vec<Metric>, PyErr> {
+    let metrics = read_multiprocess_files(files)?;
     Ok(accumulate_metrics(metrics))
+}
+
+#[pyfunction]
+fn merge(files: &Bound<PyList>) -> PyResult<Vec<Metric>> {
+    let filenames: Vec<String> = files.extract()?;
+    merge_internal(&filenames)
 }
 
 /// A Python module implemented in Rust.
@@ -329,4 +348,30 @@ fn prometheus_client_python_speedups(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Metric>()?;
     m.add_class::<Sample>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::*;
+
+    #[test]
+    fn test_merge() {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("tests/dbfiles");
+
+        println!("{:?}", d);
+        let files: Vec<String> = fs::read_dir(d)
+            .unwrap()
+            .filter_map(|res| res.ok())
+            .map(|dir| dir.path())
+            .filter(|f| f.extension().map_or(false, |ext| ext == "db"))
+            .map(|f| f.display().to_string())
+            .collect();
+
+        let result = merge_internal(&files);
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
+    }
 }
