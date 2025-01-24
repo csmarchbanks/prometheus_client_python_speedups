@@ -199,61 +199,64 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
     Ok(metrics)
 }
 
-fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
-    for metric in metrics.values_mut() {
+fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
+    let mut final_metrics: Vec<Metric> = Vec::with_capacity(metrics.len());
+
+    for (_, mut metric) in metrics {
         let mut samples: HashMap<(String, BTreeMap<String, String>), f64> = HashMap::new();
         let mut sample_timestamps: HashMap<(String, BTreeMap<String, String>), f64> =
             HashMap::new();
         let mut buckets: HashMap<BTreeMap<String, String>, HashMap<String, f64>> = HashMap::new();
-        for sample in &metric.samples {
+
+        for mut sample in metric.samples {
             if metric.typ == "gauge" {
-                let mut without_pid = sample.labels.clone();
-                without_pid.remove("pid");
-                let key_without_pid = (sample.name.clone(), without_pid);
                 match metric.multiprocess_mode.as_deref() {
                     Some("min") | Some("livemin") => {
-                        let current = samples.entry(key_without_pid).or_insert(sample.value);
+                        sample.labels.remove("pid");
+                        let current = samples.entry((sample.name, sample.labels)).or_insert(sample.value);
                         if sample.value < *current {
                             *current = sample.value;
                         }
                     }
                     Some("max") | Some("livemax") => {
-                        let current = samples.entry(key_without_pid).or_insert(sample.value);
+                        sample.labels.remove("pid");
+                        let current = samples.entry((sample.name, sample.labels)).or_insert(sample.value);
                         if sample.value > *current {
                             *current = sample.value;
                         }
                     }
                     Some("sum") | Some("livesum") => {
+                        sample.labels.remove("pid");
                         samples
-                            .entry(key_without_pid)
+                            .entry((sample.name, sample.labels))
                             .and_modify(|current| *current += sample.value)
                             .or_insert(sample.value);
                     }
                     Some("mostrecent") | Some("livemostrecent") => {
-                        match sample_timestamps.get_mut(&key_without_pid) {
+                        sample.labels.remove("pid");
+                        let key = (sample.name, sample.labels);
+                        match sample_timestamps.get_mut(&key) {
                             Some(current_ts) => {
                                 if sample.timestamp > *current_ts {
-                                    samples.insert(key_without_pid, sample.value);
+                                    samples.insert(key, sample.value);
                                     *current_ts = sample.timestamp;
                                 }
                             }
                             None => {
-                                samples.insert(key_without_pid.clone(), sample.value);
-                                sample_timestamps.insert(key_without_pid, sample.timestamp);
+                                samples.insert(key.clone(), sample.value);
+                                sample_timestamps.insert(key, sample.timestamp);
                             }
                         }
                     }
                     Some(_) | None => {
                         // all/liveall
-                        samples.insert((sample.name.clone(), sample.labels.clone()), sample.value);
+                        samples.insert((sample.name, sample.labels), sample.value);
                     }
                 };
             } else if metric.typ == "histogram" {
-                match sample.labels.get("le") {
+                match sample.labels.remove("le") {
                     Some(le) => {
-                        let mut without_le = sample.labels.clone();
-                        without_le.remove("le");
-                        let bucket = buckets.entry(without_le).or_default();
+                        let bucket = buckets.entry(sample.labels).or_default();
                         bucket
                             .entry(le.to_string())
                             .and_modify(|current| *current += sample.value)
@@ -261,21 +264,21 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     }
                     None => {
                         samples
-                            .entry((sample.name.clone(), sample.labels.clone()))
+                            .entry((sample.name, sample.labels))
                             .and_modify(|current| *current += sample.value)
                             .or_insert(sample.value);
                     }
                 }
             } else {
                 samples
-                    .entry((sample.name.clone(), sample.labels.clone()))
+                    .entry((sample.name, sample.labels))
                     .and_modify(|current| *current += sample.value)
                     .or_insert(sample.value);
             }
         }
         // Accumulate bucket values
         if metric.typ == "histogram" {
-            for (labels, values) in buckets.iter() {
+            for (labels, values) in buckets {
                 let mut acc = 0.0;
                 let mut sorted: Vec<(&String, &f64)> = values.iter().collect();
                 sorted.sort_by(|a, b| {
@@ -292,7 +295,7 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     acc += value;
                     samples.insert(key, acc);
                 }
-                let key = (metric.name.clone() + "_count", (*labels).clone());
+                let key = (metric.name.clone() + "_count", labels);
                 samples.insert(key, acc);
             }
         }
@@ -306,8 +309,9 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 timestamp: 0.0,
             })
             .collect();
+        final_metrics.push(metric);
     }
-    metrics.into_values().collect()
+    final_metrics
 }
 
 pub fn merge_internal(files: &[String]) -> Result<Vec<Metric>, PyErr> {
