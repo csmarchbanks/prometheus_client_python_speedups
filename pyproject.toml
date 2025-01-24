@@ -11,5 +11,8 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+readme = "README.md"
+license = { file = "LICENSE" }
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
