@@ -165,33 +165,34 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
         };
 
         for value in values {
-            let mut key = match key_cache.get(&value.key) {
-                Some(key) => (*key).clone(),
-                None => {
-                    let key = parse_key(value.key.as_str());
-                    key_cache.insert(value.key, key.clone());
-                    key
-                }
-            };
-
-            let metric = match metrics.get_mut(key.metric_name.as_str()) {
-                Some(metric) => metric,
-                None => {
-                    metrics.insert(
-                        key.metric_name.clone(),
-                        Metric::new(key.metric_name.clone(), key.help_text, typ.to_string()),
-                    );
-                    metrics.get_mut(key.metric_name.as_str()).unwrap()
-                }
-            };
+            let key = key_cache
+                .entry(value.key)
+                .or_insert_with_key(|key| parse_key(key));
+            let metric = metrics.entry(key.metric_name.clone()).or_insert_with(|| {
+                Metric::new(
+                    key.metric_name.clone(),
+                    key.help_text.clone(),
+                    typ.to_string(),
+                )
+            });
 
             if typ == "gauge" {
                 let pid = &parts[2][0..parts[2].len() - 3];
                 metric.multiprocess_mode = Some(parts[1].to_string());
                 key.labels.insert("pid".to_string(), pid.to_string());
-                metric.add_sample(key.name, key.labels, value.value, value.timestamp);
+                metric.add_sample(
+                    key.name.clone(),
+                    key.labels.clone(),
+                    value.value,
+                    value.timestamp,
+                );
             } else {
-                metric.add_sample(key.name, key.labels, value.value, value.timestamp);
+                metric.add_sample(
+                    key.name.clone(),
+                    key.labels.clone(),
+                    value.value,
+                    value.timestamp,
+                );
             }
         }
     }
@@ -211,32 +212,24 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 without_pid.remove("pid");
                 let key_without_pid = (sample.name.clone(), without_pid);
                 match metric.multiprocess_mode.as_deref() {
-                    Some("min") | Some("livemin") => match samples.get_mut(&key_without_pid) {
-                        Some(current) => {
-                            if sample.value < *current {
-                                *current = sample.value;
-                            }
+                    Some("min") | Some("livemin") => {
+                        let current = samples.entry(key_without_pid).or_insert(sample.value);
+                        if sample.value < *current {
+                            *current = sample.value;
                         }
-                        None => {
-                            samples.insert(key_without_pid, sample.value);
+                    }
+                    Some("max") | Some("livemax") => {
+                        let current = samples.entry(key_without_pid).or_insert(sample.value);
+                        if sample.value > *current {
+                            *current = sample.value;
                         }
-                    },
-                    Some("max") | Some("livemax") => match samples.get_mut(&key_without_pid) {
-                        Some(current) => {
-                            if sample.value > *current {
-                                *current = sample.value;
-                            }
-                        }
-                        None => {
-                            samples.insert(key_without_pid, sample.value);
-                        }
-                    },
-                    Some("sum") | Some("livesum") => match samples.get_mut(&key_without_pid) {
-                        Some(current) => *current += sample.value,
-                        None => {
-                            samples.insert(key_without_pid, sample.value);
-                        }
-                    },
+                    }
+                    Some("sum") | Some("livesum") => {
+                        samples
+                            .entry(key_without_pid)
+                            .and_modify(|current| *current += sample.value)
+                            .or_insert(sample.value);
+                    }
                     Some("mostrecent") | Some("livemostrecent") => {
                         match sample_timestamps.get_mut(&key_without_pid) {
                             Some(current_ts) => {
@@ -261,36 +254,24 @@ fn accumulate_metrics(mut metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     Some(le) => {
                         let mut without_le = sample.labels.clone();
                         without_le.remove("le");
-                        let bucket = match buckets.get_mut(&(without_le.clone())) {
-                            Some(bucket) => bucket,
-                            None => {
-                                buckets.insert(without_le.clone(), HashMap::new());
-                                buckets.get_mut(&(without_le.clone())).unwrap()
-                            }
-                        };
-                        match bucket.get_mut(le) {
-                            Some(current) => *current += sample.value,
-                            None => {
-                                bucket.insert(le.clone(), sample.value);
-                            }
-                        };
+                        let bucket = buckets.entry(without_le).or_default();
+                        bucket
+                            .entry(le.to_string())
+                            .and_modify(|current| *current += sample.value)
+                            .or_insert(sample.value);
                     }
                     None => {
-                        match samples.get_mut(&key) {
-                            Some(current) => *current += sample.value,
-                            None => {
-                                samples.insert(key, sample.value);
-                            }
-                        };
+                        samples
+                            .entry(key)
+                            .and_modify(|current| *current += sample.value)
+                            .or_insert(sample.value);
                     }
                 }
             } else {
-                match samples.get_mut(&key) {
-                    Some(current) => *current += sample.value,
-                    None => {
-                        samples.insert(key, sample.value);
-                    }
-                };
+                samples
+                    .entry(key)
+                    .and_modify(|current| *current += sample.value)
+                    .or_insert(sample.value);
             }
         }
         // Accumulate bucket values
