@@ -1,10 +1,12 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs::File,
     io::{self, ErrorKind, Read},
     path::Path,
     str,
 };
+
+use hashbrown::HashMap;
 
 use pyo3::{exceptions::PyIOError, prelude::*, types::PyList};
 use serde::{Deserialize, Serialize};
@@ -213,14 +215,18 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 match metric.multiprocess_mode.as_deref() {
                     Some("min") | Some("livemin") => {
                         sample.labels.remove("pid");
-                        let current = samples.entry((sample.name, sample.labels)).or_insert(sample.value);
+                        let current = samples
+                            .entry((sample.name, sample.labels))
+                            .or_insert(sample.value);
                         if sample.value < *current {
                             *current = sample.value;
                         }
                     }
                     Some("max") | Some("livemax") => {
                         sample.labels.remove("pid");
-                        let current = samples.entry((sample.name, sample.labels)).or_insert(sample.value);
+                        let current = samples
+                            .entry((sample.name, sample.labels))
+                            .or_insert(sample.value);
                         if sample.value > *current {
                             *current = sample.value;
                         }
