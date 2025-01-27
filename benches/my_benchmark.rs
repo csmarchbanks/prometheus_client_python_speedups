@@ -14,7 +14,7 @@ fn merge(c: &mut Criterion) {
         .map(|f| f.display().to_string())
         .collect();
 
-    c.bench_function("fib 20", |b| {
+    c.bench_function("merge_internal", |b| {
         b.iter(|| prometheus_client_python_speedups::merge_internal(black_box(&files)))
     });
 }
