@@ -1,3 +1,5 @@
+mod compact_string;
+
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -7,9 +9,15 @@ use std::{
 };
 
 use hashbrown::HashMap;
-
 use pyo3::{exceptions::PyIOError, prelude::*, types::PyList};
 use serde::{Deserialize, Serialize};
+
+use crate::compact_string::CompactString;
+
+const LE: CompactString = CompactString::const_new("le");
+const PID: CompactString = CompactString::const_new("pid");
+
+type Labels = BTreeMap<CompactString, CompactString>;
 
 #[pyclass]
 #[derive(Debug)]
@@ -36,13 +44,7 @@ impl Metric {
         }
     }
 
-    pub fn add_sample(
-        &mut self,
-        name: String,
-        labels: BTreeMap<String, String>,
-        value: f64,
-        timestamp: f64,
-    ) {
+    pub fn add_sample(&mut self, name: String, labels: Labels, value: f64, timestamp: f64) {
         self.samples.push(Sample {
             name,
             labels,
@@ -58,7 +60,7 @@ pub struct Sample {
     #[pyo3(get)]
     pub name: String,
     #[pyo3(get)]
-    pub labels: BTreeMap<String, String>,
+    pub labels: Labels,
     #[pyo3(get)]
     pub timestamp: f64,
     #[pyo3(get)]
@@ -69,7 +71,7 @@ pub struct Sample {
 struct Key {
     metric_name: String,
     name: String,
-    labels: BTreeMap<String, String>,
+    labels: Labels,
     help_text: String,
 }
 
@@ -181,7 +183,7 @@ fn read_multiprocess_files(files: &[String]) -> Result<HashMap<String, Metric>, 
             if typ == "gauge" {
                 let pid = &parts[2][0..parts[2].len() - 3];
                 metric.multiprocess_mode = Some(parts[1].to_string());
-                key.labels.insert("pid".to_string(), pid.to_string());
+                key.labels.insert(PID.clone(), CompactString::new(pid));
                 metric.add_sample(
                     key.name.clone(),
                     key.labels.clone(),
@@ -205,16 +207,15 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
     let mut final_metrics: Vec<Metric> = Vec::with_capacity(metrics.len());
 
     for (_, mut metric) in metrics {
-        let mut samples: HashMap<(String, BTreeMap<String, String>), f64> = HashMap::new();
-        let mut sample_timestamps: HashMap<(String, BTreeMap<String, String>), f64> =
-            HashMap::new();
-        let mut buckets: HashMap<BTreeMap<String, String>, HashMap<String, f64>> = HashMap::new();
+        let mut samples: HashMap<(String, Labels), f64> = HashMap::new();
+        let mut sample_timestamps: HashMap<(String, Labels), f64> = HashMap::new();
+        let mut buckets: HashMap<Labels, HashMap<CompactString, f64>> = HashMap::new();
 
         for mut sample in metric.samples {
             if metric.typ == "gauge" {
                 match metric.multiprocess_mode.as_deref() {
                     Some("min") | Some("livemin") => {
-                        sample.labels.remove("pid");
+                        sample.labels.remove(&PID);
                         let current = samples
                             .entry((sample.name, sample.labels))
                             .or_insert(sample.value);
@@ -223,7 +224,7 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
                         }
                     }
                     Some("max") | Some("livemax") => {
-                        sample.labels.remove("pid");
+                        sample.labels.remove(&PID);
                         let current = samples
                             .entry((sample.name, sample.labels))
                             .or_insert(sample.value);
@@ -232,14 +233,14 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
                         }
                     }
                     Some("sum") | Some("livesum") => {
-                        sample.labels.remove("pid");
+                        sample.labels.remove(&PID);
                         samples
                             .entry((sample.name, sample.labels))
                             .and_modify(|current| *current += sample.value)
                             .or_insert(sample.value);
                     }
                     Some("mostrecent") | Some("livemostrecent") => {
-                        sample.labels.remove("pid");
+                        sample.labels.remove(&PID);
                         let key = (sample.name, sample.labels);
                         match sample_timestamps.get_mut(&key) {
                             Some(current_ts) => {
@@ -260,11 +261,11 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
                     }
                 };
             } else if metric.typ == "histogram" {
-                match sample.labels.remove("le") {
+                match sample.labels.remove(&LE) {
                     Some(le) => {
                         let bucket = buckets.entry(sample.labels).or_default();
                         bucket
-                            .entry(le.to_string())
+                            .entry(le)
                             .and_modify(|current| *current += sample.value)
                             .or_insert(sample.value);
                     }
@@ -286,7 +287,7 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
         if metric.typ == "histogram" {
             for (labels, values) in buckets {
                 let mut acc = 0.0;
-                let mut sorted: Vec<(&String, &f64)> = values.iter().collect();
+                let mut sorted: Vec<(&CompactString, &f64)> = values.iter().collect();
                 sorted.sort_by(|a, b| {
                     // Failure to unwrap would incidcate a corrupted file. Not much we could do
                     // about that.
@@ -296,7 +297,7 @@ fn accumulate_metrics(metrics: HashMap<String, Metric>) -> Vec<Metric> {
                 });
                 for (bucket, value) in sorted {
                     let mut with_le = labels.clone();
-                    with_le.insert("le".to_string(), (*bucket).clone());
+                    with_le.insert(LE.clone(), (*bucket).clone());
                     let key = (metric.name.clone() + "_bucket", with_le);
                     acc += value;
                     samples.insert(key, acc);
